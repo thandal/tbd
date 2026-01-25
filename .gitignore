@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+python_env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.lucid
+.vscode/
+.idea/
+
+# Environment variables
+.env
+
+# Playwright
+.playwright/
+downloads/
+browser_data/
+test-results/
+
+# OS junk
+.DS_Store
+Thumbs.db
