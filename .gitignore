@@ -27,3 +27,7 @@ test-results/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Vim
+*.swp
+*.swo
