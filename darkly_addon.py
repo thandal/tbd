@@ -7,6 +7,27 @@ from bs4 import BeautifulSoup, Comment
 
 load_dotenv()
 
+DEFAULT_INSTRUCTIONS = """* Keep all meaningful text and links (hrefs).
+* Remove all ads, tracking scripts, and other non-content elements.
+* Include a <style> block with a simple, modern design (vibrant colors, clean typography, responsive layout).
+* Add links to wikipedia pages where applicable.
+* Return ONLY the complete HTML code starting with <!DOCTYPE html>."""
+
+# GLOBAL STATE for instructions (can be overridden by http://dark.ly)
+INSTRUCTIONS_FILE = "ai_instructions.txt"
+
+def load_instructions():
+    if os.path.exists(INSTRUCTIONS_FILE):
+        with open(INSTRUCTIONS_FILE, "r") as f:
+            return f.read()
+    return DEFAULT_INSTRUCTIONS
+
+def save_instructions(instructions):
+    with open(INSTRUCTIONS_FILE, "w") as f:
+        f.write(instructions)
+
+current_instructions = load_instructions()
+
 def simplify_html_rule_based(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
@@ -38,40 +59,24 @@ def simplify_html_rule_based(html_content):
 
     return soup.prettify()
 
-def simplify_html_readability(html_content, url=None):
-    """Simplify HTML content using ReadabilitySimplifier."""
-    try:
-        result = simplifier.simplify(html_content, url=url)
-        return result['content']
-    except Exception as e:
-        print(f"Readability simplification failed: {e}")
-        return html_content
-
-def simplify_html_ai(html_content):
+def simplify_html_ai(html_content, instructions=None):
     if not html_content:
         return "Error: No HTML content provided"
     
-    # with open("debug_html_content.html", "w") as f:
-    #     f.write(html_content)   
-
+    # Use provided instructions or fallback to current global state
+    ai_instructions = instructions or current_instructions
+    
     print(f"Original HTML content length: {len(html_content)}")
 
     # First, use rule-based simplification to reduce token count
     pre_simplified = simplify_html_rule_based(html_content)
     print(f"Pre-simplified HTML content length: {len(pre_simplified)}")
 
-    # with open("debug_pre_simplified_html_content.html", "w") as f:
-    #     f.write(pre_simplified)   
-
     prompt = f"""
     Below is the HTML content of a webpage. Your task is to rewrite it into a streamlined version.
     
     Rules:
-    * Keep all meaningful text and links (hrefs).
-    * Remove all ads, tracking scripts, and other non-content elements.
-    * Include a <style> block with a simple, modern design (vibrant colors, clean typography, responsive layout).
-    * Add links to wikipedia pages where applicable.
-    * Return ONLY the complete HTML code starting with <!DOCTYPE html>.
+    {ai_instructions}
     
     Content to transform:
     {pre_simplified}
@@ -117,19 +122,168 @@ def simplify_html_ai(html_content):
 class DarklyAddon:
     def __init__(self):
         print("Darkly Proxy Addon Loaded")
+        print("Control Panel available at http://dark.ly")
+
+    def request(self, flow: http.HTTPFlow):
+        if flow.request.pretty_host == "dark.ly":
+            if flow.request.method == "POST":
+                # Save instructions
+                try:
+                    form_data = flow.request.multipart_form or flow.request.urlencoded_form
+                    new_instructions = form_data.get("instructions")
+                    action = form_data.get("action")
+                    
+                    global current_instructions
+                    if action == "reset":
+                        current_instructions = DEFAULT_INSTRUCTIONS
+                    elif new_instructions:
+                        current_instructions = new_instructions
+                    
+                    save_instructions(current_instructions)
+                    print(f"Instructions updated/reset.")
+                    
+                    # Redirect back to home after saving
+                    flow.response = http.Response.make(
+                        302, 
+                        b"", 
+                        {
+                            "Location": "/",
+                            "Set-Cookie": f"darkly_instructions={current_instructions.encode('utf-8').hex()}; Path=/; Max-Age=31536000"
+                        }
+                    )
+                except Exception as e:
+                    flow.response = http.Response.make(500, f"Error saving: {str(e)}".encode(), {"Content-Type": "text/plain"})
+                return
+
+            # GET / - Show editor
+            html_page = f"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Through a Browser, Darkly - Config</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com">
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+                <style>
+                    :root {{
+                        --primary: #ff3e81;
+                        --bg: #0f172a;
+                        --card: #1e293b;
+                        --text: #f8fafc;
+                        --text-dim: #94a3b8;
+                    }}
+                    body {{
+                        font-family: 'Outfit', sans-serif;
+                        background-color: var(--bg);
+                        color: var(--text);
+                        margin: 0;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        min-height: 100vh;
+                        overflow: hidden;
+                    }}
+                    .container {{
+                        background: var(--card);
+                        padding: 2.5rem;
+                        border-radius: 1.5rem;
+                        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                        width: 100%;
+                        max-width: 700px;
+                        border: 1px solid rgba(255, 255, 255, 0.1);
+                        backdrop-filter: blur(10px);
+                        animation: slideIn 0.6s ease-out;
+                    }}
+                    @keyframes slideIn {{
+                        from {{ opacity: 0; transform: translateY(20px); }}
+                        to {{ opacity: 1; transform: translateY(0); }}
+                    }}
+                    h1 {{
+                        font-weight: 600;
+                        margin-top: 0;
+                        font-size: 1.875rem;
+                        background: linear-gradient(to right, var(--primary), #fbbf24);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        margin-bottom: 0.5rem;
+                    }}
+                    p {{ color: var(--text-dim); margin-bottom: 2rem; }}
+                    textarea {{
+                        width: 100%;
+                        height: 300px;
+                        background: #0f172a;
+                        border: 2px solid #334155;
+                        border-radius: 0.75rem;
+                        color: #e2e8f0;
+                        font-family: 'JetBrains Mono', monospace;
+                        padding: 1rem;
+                        font-size: 0.9rem;
+                        resize: none;
+                        box-sizing: border-box;
+                        transition: border-color 0.2s;
+                        margin-bottom: 1.5rem;
+                    }}
+                    textarea:focus {{
+                        outline: none;
+                        border-color: var(--primary);
+                        box-shadow: 0 0 0 4px rgba(255, 62, 129, 0.1);
+                    }}
+                    .btn {{
+                        background: var(--primary);
+                        color: white;
+                        border: none;
+                        padding: 0.75rem 2rem;
+                        border-radius: 0.75rem;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        transition: all 0.2s;
+                        width: 100%;
+                        font-size: 1rem;
+                    }}
+                    .btn:hover {{
+                        transform: translateY(-2px);
+                        box-shadow: 0 10px 15px -3px rgba(255, 62, 129, 0.4);
+                        background: #f43f5e;
+                    }}
+                    .btn:active {{ transform: translateY(0); }}
+                    .btn-secondary {{
+                        background: #334155;
+                    }}
+                    .btn-secondary:hover {{
+                        background: #475569;
+                        box-shadow: 0 10px 15px -3px rgba(51, 65, 85, 0.4);
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Darkly Config</h1>
+                    <p>Edit the instructions used by the AI to simplify web pages.</p>
+                    <form action="/" method="POST">
+                        <textarea name="instructions">{current_instructions}</textarea>
+                        <div style="display: flex; gap: 1rem;">
+                            <button type="submit" name="action" value="save" class="btn">Save Instructions</button>
+                            <button type="submit" name="action" value="reset" class="btn btn-secondary">Reset to Defaults</button>
+                        </div>
+                    </form>
+                </div>
+            </body>
+            </html>
+            """
+            flow.response = http.Response.make(200, html_page.encode(), {"Content-Type": "text/html"})
+            return
 
     def response(self, flow: http.HTTPFlow):
         # We only want to simplify HTML responses
         content_type = flow.response.headers.get("Content-Type", "")
         
-        if "text/html" in content_type:
-            # Check if this is a request we should simplify 
-            # (e.g., avoid modifying mitmproxy's own internal pages)
-            if flow.request.pretty_host == "mitm.it":
-                return
-
+        # Check if this is a request we should simplify 
+        # (e.g., avoid modifying mitmproxy's own internal pages)
+        if "text/html" in content_type and flow.request.pretty_host != "dark.ly" and flow.request.pretty_host != "mitm.it":
             print(f"Simplifying: {flow.request.pretty_url}")
-            
             try:
                 # Decompress the response if needed
                 flow.response.decode()

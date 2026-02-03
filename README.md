@@ -22,6 +22,12 @@ pip install dotenv mitmproxy openai
 python3 app.py
 ```
 
+## Control Panel
+You can customize the AI's behavior by visiting **http://darkly** in your browser (while the proxy is running).
+* Edit the system instructions to change how pages are simplified.
+* Save instructions (persisted to `ai_instructions.txt` and a cookie).
+* Reset to default settings at any time.
+
 ### Chrome setup: Create a Darkly profile
 * Create a new Chrome profile
 * Install Proxy Switcher Chrome extension: https://chromewebstore.google.com/detail/onnfghpihccifgojkpnnncpagjcdbjod
