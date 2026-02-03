@@ -31,3 +31,5 @@ Thumbs.db
 # Vim
 *.swp
 *.swo
+
+debug_*.html
