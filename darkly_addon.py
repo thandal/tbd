@@ -4,7 +4,6 @@ import time
 from dotenv import load_dotenv
 from openai import OpenAI
 from bs4 import BeautifulSoup, Comment
-from readability_simplifier import ReadabilitySimplifier
 
 load_dotenv()
 
@@ -39,9 +38,6 @@ def simplify_html_rule_based(html_content):
 
     return soup.prettify()
 
-# Initialize the simplifier
-simplifier = ReadabilitySimplifier()
-
 def simplify_html_readability(html_content, url=None):
     """Simplify HTML content using ReadabilitySimplifier."""
     try:
@@ -58,12 +54,10 @@ def simplify_html_ai(html_content):
     # with open("debug_html_content.html", "w") as f:
     #     f.write(html_content)   
 
-    # First, use rule-based simplification to reduce token count
     print(f"Original HTML content length: {len(html_content)}")
-    # First, use readability simplification to reduce token count
+
+    # First, use rule-based simplification to reduce token count
     pre_simplified = simplify_html_rule_based(html_content)
-    # pre_simplified = simplify_html_readability(html_content)
-    # pre_simplified = html_content
     print(f"Pre-simplified HTML content length: {len(pre_simplified)}")
 
     # with open("debug_pre_simplified_html_content.html", "w") as f:
