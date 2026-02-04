@@ -25,7 +25,8 @@ python3 app.py
 ### Chrome setup: Create a Darkly profile
 * Create a new Chrome profile
 * Install Proxy Switcher Chrome extension: https://chromewebstore.google.com/detail/onnfghpihccifgojkpnnncpagjcdbjod
-* Set to manual proxy, address 127.0.0.1, port 8888, server type http. For example: ![proxy_switcher_configuration](proxy_switcher_configuration.png)
+* Set to manual proxy, address 127.0.0.1, port 8899, server type http. For example: ![proxy_switcher_configuration](proxy_switcher_configuration.png)
+* Make sure to click the green check mark (see red arrow in the image) to save the changes!
 
 ### Add the MITM certificate to Chrome
 * Go to http://mitm.it/ in the Darkly browser profile
