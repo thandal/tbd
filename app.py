@@ -2,7 +2,7 @@ import subprocess
 import os
 import sys
 
-PORT = "8888"
+PORT = "8899"
 
 def run_proxy():
     print("Starting 'Through a Browser, Darkly' Proxy...")

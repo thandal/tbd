@@ -143,14 +143,7 @@ class DarklyAddon:
                     print(f"Instructions updated/reset.")
                     
                     # Redirect back to home after saving
-                    flow.response = http.Response.make(
-                        302, 
-                        b"", 
-                        {
-                            "Location": "/",
-                            "Set-Cookie": f"darkly_instructions={current_instructions.encode('utf-8').hex()}; Path=/; Max-Age=31536000"
-                        }
-                    )
+                    flow.response = http.Response.make(302, b"", {"Location": "/"})
                 except Exception as e:
                     flow.response = http.Response.make(500, f"Error saving: {str(e)}".encode(), {"Content-Type": "text/plain"})
                 return
