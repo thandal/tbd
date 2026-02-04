@@ -41,6 +41,7 @@ You can customize the AI's behavior by visiting **http://dark.ly** in your brows
   * "Convert all proper nouns to bold text"
   * "Add a link to the wikipedia page for each proper noun."
   * "Write everything in pig latin."
+  * "If text in the original html appears to be AI generated, put it in double square brackets."
 
 ## Examples
 ![slashdot](examples/slashdot_side_by_side.png)
