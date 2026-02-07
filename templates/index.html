@@ -166,26 +166,6 @@
             }
         }
 
-        .settings-toggle {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 20px;
-            cursor: pointer;
-            color: var(--text-dim);
-            font-size: 0.9rem;
-            transition: color 0.3s;
-        }
-
-        .settings-toggle:hover {
-            color: var(--accent);
-        }
-
-        #settings-chevron {
-            transition: transform 0.3s;
-        }
-
         @keyframes fadeIn {
             from {
                 opacity: 0;
@@ -218,7 +198,7 @@
             left: calc(100% + 20px);
             top: 0;
             width: 50vw;
-            background: var(--glass);
+            background: var(--bg);
             backdrop-filter: blur(20px);
             border: 1px solid var(--border);
             border-radius: 24px;
@@ -253,6 +233,27 @@
             background: rgba(255, 255, 255, 0.1);
             color: white;
         }
+
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: transparent;
+            color: var(--text-dim);
+            border: none;
+            cursor: pointer;
+            padding: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--accent);
+        }
     </style>
 </head>
 
@@ -275,6 +276,13 @@
         </div>
 
         <div id="settings-panel" class="settings-panel">
+            <button class="close-btn" onclick="toggleSettings()" title="Close">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
             <h3 style="margin-top: 0; font-size: 1.1rem; color: var(--accent);">AI Instructions</h3>
             <textarea id="instructions-textarea" placeholder="Enter AI instructions..."
                 style="height: 300px;"></textarea>
