@@ -19,7 +19,7 @@ pip install dotenv mitmproxy openai beautifulsoup4
 * Create a .env file from .env.example and fill in your API keys as desired
 * Start proxy app:
 ```
-python3 app.py
+python3 darkly_proxy.py
 ```
 
 ### Chrome setup: Create a Darkly profile
