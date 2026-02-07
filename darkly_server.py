@@ -1,0 +1,48 @@
+import os
+from dotenv import load_dotenv
+from flask import Flask, render_template, request, Response
+import requests
+from darkly_addon import simplify_html_rule_based, simplify_html_ai
+
+load_dotenv()
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/proxy')
+def proxy():
+    url = request.args.get('url')
+    
+    if not url:
+        return "No URL provided", 400
+    
+    if not url.startswith('http'):
+        url = 'https://' + url
+        
+    try:
+        # Fetch HTML directly with requests
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
+        html_content = response.text
+        
+        # Use AI to simplify the HTML (uses AI_PROVIDER from .env)
+        simplified = simplify_html_ai(html_content)
+        
+        if simplified.startswith("Error:"):
+            return simplified, 500
+            
+        return Response(simplified, mimetype='text/html')
+            
+    except requests.RequestException as e:
+        return f"Error fetching page: {str(e)}", 500
+    except Exception as e:
+        return f"Error processing page: {str(e)}", 500
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
