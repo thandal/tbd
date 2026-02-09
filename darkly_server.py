@@ -39,7 +39,7 @@ def proxy():
         html_content = response.text
 
         # Use AI to simplify the HTML (uses AI_PROVIDER from .env)
-        simplified = simplify_html_ai(html_content)
+        simplified = simplify_html(html_content)
         
         if simplified.startswith("Error:"):
             return simplified, 500

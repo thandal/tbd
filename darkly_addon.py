@@ -39,7 +39,8 @@ def simplify_html_rule_based(html_content):
     # List of tags to remove entirely
     strip_tags = [
         'script', 'style', 'noscript', 'iframe', 'svg', 'canvas', 
-        'video', 'audio', 'picture', 'source', 'object', 'embed'
+        'video', 'audio', 'picture', 'source', 'object', 'embed',
+        'meta', 'link', 'button', 'form', 'input', 'textarea', 'select', 'label'
     ]
     for tag in soup(strip_tags):
         tag.decompose()
@@ -57,12 +58,24 @@ def simplify_html_rule_based(html_content):
         else:
             # Strip all attributes from other tags
             tag.attrs = {}
-            
+
     # Remove comments
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
 
+    # Second pass: remove empty tags (recursively from bottom up)
+    while True:
+        empty_tags = [tag for tag in soup.find_all(True) 
+                      if not tag.get_text(strip=True) 
+                      and not tag.find_all('img') 
+                      and not (tag.name == 'a' and tag.get('href'))]
+        if not empty_tags:
+            break
+        for tag in empty_tags:
+            tag.decompose()
+
     return soup.prettify()
+
 
 def simplify_html_ai(html_content, instructions=None):
     if not html_content:
@@ -72,10 +85,15 @@ def simplify_html_ai(html_content, instructions=None):
     ai_instructions = instructions or current_instructions
     
     print(f"Original HTML content length: {len(html_content)}")
+    with open("debug_original.html", "w") as f:
+        f.write(html_content)
 
     # First, use rule-based simplification to reduce token count
     pre_simplified = simplify_html_rule_based(html_content)
     print(f"Pre-simplified HTML content length: {len(pre_simplified)}")
+
+    with open("debug_pre_simplified.html", "w") as f:
+        f.write(pre_simplified)
 
     prompt = f"""
     {ai_instructions}
@@ -119,7 +137,39 @@ def simplify_html_ai(html_content, instructions=None):
         text = text.split("```html")[1].split("```")[0]
     elif "```" in text:
         text = text.split("```")[1].split("```")[0]
-    return text.strip()
+
+    text = text.strip()
+
+    with open("debug_ai_generated.html", "w") as f:
+        f.write(text)
+
+    return text
+
+def simplify_html(html_content, instructions=None):
+    if not html_content:
+        return "Error: No HTML content provided"
+    
+    # Use provided instructions or fallback to current global state
+    ai_instructions = instructions or current_instructions
+    
+    print(f"Original HTML content length: {len(html_content)}")
+    with open("debug_original.html", "w") as f:
+        f.write(html_content)
+
+    # First, use rule-based simplification to reduce token count
+    rule_simplified = simplify_html_rule_based(html_content)
+    print(f"Pre-simplified HTML content length: {len(rule_simplified)}")
+
+    with open("debug_rule_simplified.html", "w") as f:
+        f.write(rule_simplified)
+
+    ai_simplified = simplify_html_ai(rule_simplified, ai_instructions)
+    print(f"AI-simplified HTML content length: {len(ai_simplified)}")
+
+    with open("debug_ai_simplified.html", "w") as f:
+        f.write(ai_simplified)
+
+    return ai_simplified
 
 def rewrite_links(html_content, base_url, proxy_prefix):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -304,7 +354,7 @@ class DarklyAddon:
                 html_content = flow.response.get_text()
                 
                 # Apply AI simplification
-                simplified_html = simplify_html_ai(html_content)
+                simplified_html = simplify_html(html_content)
                 
                 if simplified_html and not simplified_html.startswith("Error"):
                     flow.response.set_text(simplified_html)
