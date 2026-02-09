@@ -68,6 +68,7 @@ def simplify_html_rule_based(html_content):
         empty_tags = [tag for tag in soup.find_all(True) 
                       if not tag.get_text(strip=True) 
                       and not tag.find_all('img') 
+                      and tag.name != 'img'
                       and not (tag.name == 'a' and tag.get('href'))]
         if not empty_tags:
             break
