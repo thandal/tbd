@@ -78,29 +78,15 @@ def simplify_html_rule_based(html_content):
     return soup.prettify()
 
 
-def simplify_html_ai(html_content, instructions=None):
+def simplify_html_ai(html_content):
     if not html_content:
         return "Error: No HTML content provided"
-    
-    # Use provided instructions or fallback to current global state
-    ai_instructions = instructions or current_instructions
-    
-    print(f"Original HTML content length: {len(html_content)}")
-    with open("debug_original.html", "w") as f:
-        f.write(html_content)
-
-    # First, use rule-based simplification to reduce token count
-    pre_simplified = simplify_html_rule_based(html_content)
-    print(f"Pre-simplified HTML content length: {len(pre_simplified)}")
-
-    with open("debug_pre_simplified.html", "w") as f:
-        f.write(pre_simplified)
 
     prompt = f"""
-    {ai_instructions}
+    {current_instructions}
     
     Content to transform:
-    {pre_simplified}
+    {html_content}
     """
     
     start_time = time.time()
@@ -140,31 +126,23 @@ def simplify_html_ai(html_content, instructions=None):
         text = text.split("```")[1].split("```")[0]
 
     text = text.strip()
-
-    with open("debug_ai_generated.html", "w") as f:
-        f.write(text)
-
     return text
 
-def simplify_html(html_content, instructions=None):
+def simplify_html(html_content):
     if not html_content:
         return "Error: No HTML content provided"
-    
-    # Use provided instructions or fallback to current global state
-    ai_instructions = instructions or current_instructions
     
     print(f"Original HTML content length: {len(html_content)}")
     with open("debug_original.html", "w") as f:
         f.write(html_content)
 
-    # First, use rule-based simplification to reduce token count
     rule_simplified = simplify_html_rule_based(html_content)
-    print(f"Pre-simplified HTML content length: {len(rule_simplified)}")
+    print(f"Rule-simplified HTML content length: {len(rule_simplified)}")
 
     with open("debug_rule_simplified.html", "w") as f:
         f.write(rule_simplified)
 
-    ai_simplified = simplify_html_ai(rule_simplified, ai_instructions)
+    ai_simplified = simplify_html_ai(rule_simplified)
     print(f"AI-simplified HTML content length: {len(ai_simplified)}")
 
     with open("debug_ai_simplified.html", "w") as f:

@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, Response, jsonify
 import requests
-from darkly_addon import simplify_html_ai, rewrite_links
+from darkly_addon import simplify_html, rewrite_links
 
 load_dotenv()
 
