@@ -34,20 +34,22 @@ def save_instructions(instructions):
 current_instructions = load_instructions()
 
 def simplify_html_rule_based(html_content):
+    """Strip known non-content tags and simplify HTML structure."""
     soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # List of tags to remove entirely
-    strip_tags = [
-        'script', 'style', 'noscript', 'iframe', 'svg', 'canvas', 
-        'video', 'audio', 'picture', 'source', 'object', 'embed',
-        'meta', 'link', 'button', 'form', 'input', 'textarea', 'select', 'label'
-    ]
-    for tag in soup(strip_tags):
+
+    # Remove tags that never contain useful visible content
+    for tag in soup(['script', 'style', 'noscript', 'iframe', 'svg', 'canvas',
+                     'video', 'audio', 'picture', 'source', 'object', 'embed',
+                     'button', 'input', 'textarea', 'select', 'form']):
         tag.decompose()
-        
-    # Simplify the structure
+
+    # html.parser incorrectly treats <link>/<meta> as containers, swallowing
+    # sibling content. unwrap() removes the tag but keeps any swallowed children.
+    for tag in soup(['link', 'meta']):
+        tag.unwrap()
+
+    # Strip attributes (keep href on <a>, src/alt on <img>)
     for tag in soup.find_all(True):
-        # Keep only basic attributes for a few tags
         if tag.name == 'a':
             href = tag.get('href')
             tag.attrs = {'href': href} if href else {}
@@ -56,24 +58,29 @@ def simplify_html_rule_based(html_content):
             alt = tag.get('alt', '')
             tag.attrs = {'src': src, 'alt': alt} if src else {}
         else:
-            # Strip all attributes from other tags
             tag.attrs = {}
 
     # Remove comments
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
 
-    # Second pass: remove empty tags (recursively from bottom up)
-    while True:
-        empty_tags = [tag for tag in soup.find_all(True) 
-                      if not tag.get_text(strip=True) 
-                      and not tag.find_all('img') 
-                      and tag.name != 'img'
-                      and not (tag.name == 'a' and tag.get('href'))]
-        if not empty_tags:
+    # Remove only true leaf-level empty tags (no children, no text)
+    keep_tags = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th',
+                 'tr', 'table', 'thead', 'tbody', 'ul', 'ol', 'dl', 'dt', 'dd',
+                 'blockquote', 'pre', 'article', 'section', 'main', 'figure',
+                 'body', 'html', 'head', 'title', 'nav', 'header', 'footer'}
+    for _ in range(3):
+        empty = [t for t in soup.find_all(True)
+                 if t.name not in keep_tags
+                 and not t.get_text(strip=True)
+                 and not t.find_all('img')
+                 and t.name != 'img'
+                 and not (t.name == 'a' and t.get('href'))
+                 and not list(t.children)]
+        if not empty:
             break
-        for tag in empty_tags:
-            tag.decompose()
+        for t in empty:
+            t.decompose()
 
     return soup.prettify()
 
