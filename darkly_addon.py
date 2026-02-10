@@ -85,55 +85,119 @@ def simplify_html_rule_based(html_content):
     return soup.prettify()
 
 
-def simplify_html_ai(html_content):
-    if not html_content:
-        return "Error: No HTML content provided"
-
-    prompt = f"""
-    {current_instructions}
-    
-    Content to transform:
-    {html_content}
-    """
-    
-    start_time = time.time()
+def _get_llm_client():
+    """Return (client, model_name) based on env config."""
     model_provider = os.getenv("AI_PROVIDER")
     if model_provider == "cerebras":
         api_key = os.getenv("CEREBRAS_API_KEY")
         base_url = "https://api.cerebras.ai/v1"
         model_name = os.getenv("CEREBRAS_MODEL")
-    elif model_provider== "gemini":
+    elif model_provider == "gemini":
         api_key = os.getenv("GEMINI_API_KEY")
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
         model_name = os.getenv("GEMINI_MODEL")
     elif model_provider == "groq":
         api_key = os.getenv("GROQ_API_KEY")
-        base_url="https://api.groq.com/openai/v1"
+        base_url = "https://api.groq.com/openai/v1"
         model_name = os.getenv("GROQ_MODEL")
     elif model_provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = "https://api.openai.com/v1"
         model_name = os.getenv("OPENAI_MODEL")
     else:
-        return "Error: Unsupported model type"
+        return None, None
 
     client = OpenAI(api_key=api_key, base_url=base_url)
+    return client, model_name
+
+
+def _call_llm(client, model_name, prompt):
+    """Call the LLM and return the response text, stripping markdown fences."""
+    start_time = time.time()
     response = client.chat.completions.create(
         model=model_name,
         messages=[{"role": "user", "content": prompt}]
     )
     text = response.choices[0].message.content
-    
     duration = time.time() - start_time
     print(f"--- AI Generation ({model_name}) took {duration:.2f}s ---")
-    
+
     if "```html" in text:
         text = text.split("```html")[1].split("```")[0]
     elif "```" in text:
         text = text.split("```")[1].split("```")[0]
 
-    text = text.strip()
-    return text
+    return text.strip()
+
+
+import re
+
+def _split_html_into_chunks(html_content, max_chunk_size=50000):
+    """Split HTML at heading boundaries into chunks of roughly max_chunk_size."""
+    if len(html_content) <= max_chunk_size:
+        return [html_content]
+
+    # Split at major heading tags (<h1>, <h2>, <h3>) to keep sections intact
+    # Use lookahead so the heading stays with the chunk that follows it
+    parts = re.split(r'(?=<(?:h[1-3])[\s>])', html_content, flags=re.IGNORECASE)
+
+    chunks = []
+    current_chunk = ""
+
+    for part in parts:
+        # If adding this part would exceed the limit and we already have content,
+        # save the current chunk and start a new one
+        if current_chunk and len(current_chunk) + len(part) > max_chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = part
+        else:
+            current_chunk += part
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def _compress_chunk(client, model_name, chunk, chunk_index, total_chunks):
+    """Use LLM to compress one chunk into compact HTML, preserving content."""
+    prompt = f"""You are processing part {chunk_index + 1} of {total_chunks} of a web page.
+
+Rewrite this HTML fragment into MUCH more compact HTML. Rules:
+* Keep ALL meaningful text content — do not omit or summarize.
+* Keep all links (a href) and images (img src).
+* Remove all redundant wrapper divs, spans, and empty tags.
+* Remove navigation, sidebars, footers, and non-content elements.
+* Use simple semantic HTML (p, h1-h6, ul, li, table, a, img).  
+* Do NOT add any styling, <head>, or <body> tags — just the content fragment.
+* Return ONLY the HTML fragment, no explanation.
+
+HTML to compress:
+{chunk}"""
+
+    print(f"  Compressing chunk {chunk_index + 1}/{total_chunks} ({len(chunk)} chars)...")
+    result = _call_llm(client, model_name, prompt)
+    print(f"  Chunk {chunk_index + 1}: {len(chunk)} → {len(result)} chars")
+    return result
+
+
+def simplify_html_ai(html_content):
+    """Single-pass AI simplification for small pages."""
+    if not html_content:
+        return "Error: No HTML content provided"
+
+    client, model_name = _get_llm_client()
+    if not client:
+        return "Error: Unsupported model type"
+
+    prompt = f"""\
+    {current_instructions}
+    
+    Content to transform:
+    {html_content}
+    """
+    return _call_llm(client, model_name, prompt)
+
 
 def simplify_html(html_content):
     if not html_content:
@@ -149,7 +213,43 @@ def simplify_html(html_content):
     with open("debug_rule_simplified.html", "w") as f:
         f.write(rule_simplified)
 
-    ai_simplified = simplify_html_ai(rule_simplified)
+    # If small enough, single-pass through LLM
+    MAX_CHUNK_SIZE = 50000
+    if len(rule_simplified) <= MAX_CHUNK_SIZE:
+        print("Content fits in single LLM call")
+        ai_simplified = simplify_html_ai(rule_simplified)
+    else:
+        # Chunked processing for large pages
+        client, model_name = _get_llm_client()
+        if not client:
+            return "Error: Unsupported model type"
+
+        chunks = _split_html_into_chunks(rule_simplified, MAX_CHUNK_SIZE)
+        print(f"Content too large — splitting into {len(chunks)} chunks")
+
+        # Compress each chunk
+        compressed = []
+        for i, chunk in enumerate(chunks):
+            compressed_chunk = _compress_chunk(client, model_name, chunk, i, len(chunks))
+            compressed.append(compressed_chunk)
+
+        # Assemble compressed chunks with final LLM call
+        assembled_content = "\n\n<!-- SECTION BREAK -->\n\n".join(compressed)
+        print(f"Assembled compressed content: {len(assembled_content)} chars")
+
+        assemble_prompt = f"""\
+{current_instructions}
+
+The content below was split into {len(chunks)} separate chunks.
+Assemble them into a single, unified HTML page.
+Make sure the content flows naturally and there are no duplicated sections.
+
+Compressed content:
+{assembled_content}
+"""
+        print("Assembling final page...")
+        ai_simplified = _call_llm(client, model_name, assemble_prompt)
+
     print(f"AI-simplified HTML content length: {len(ai_simplified)}")
 
     with open("debug_ai_simplified.html", "w") as f:
