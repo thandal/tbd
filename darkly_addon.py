@@ -139,7 +139,7 @@ def _split_html_into_chunks(html_content, max_chunk_size=50000):
 
     # Split at major heading tags (<h1>, <h2>, <h3>) to keep sections intact
     # Use lookahead so the heading stays with the chunk that follows it
-    parts = re.split(r'(?=<(?:h[1-3])[\s>])', html_content, flags=re.IGNORECASE)
+    parts = re.split(r'(?=<(?:h[1-4])[\s>])', html_content, flags=re.IGNORECASE)
 
     chunks = []
     current_chunk = ""
@@ -230,11 +230,13 @@ def simplify_html(html_content):
         # Compress each chunk
         compressed = []
         for i, chunk in enumerate(chunks):
+            with open(f"debug_chunk_{i:02d}.html", "w") as f:
+                f.write(chunk)
             compressed_chunk = _compress_chunk(client, model_name, chunk, i, len(chunks))
             compressed.append(compressed_chunk)
 
         # Assemble compressed chunks with final LLM call
-        assembled_content = "\n\n<!-- SECTION BREAK -->\n\n".join(compressed)
+        assembled_content = "\n\n<!-- CHUNK BREAK -->\n\n".join(compressed)
         print(f"Assembled compressed content: {len(assembled_content)} chars")
 
         assemble_prompt = f"""\
