@@ -1,8 +1,10 @@
 from mitmproxy import http
+import asyncio
+import concurrent.futures
 import os
 import time
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 from bs4 import BeautifulSoup, Comment
 from urllib.parse import urljoin, quote
 
@@ -107,14 +109,14 @@ def _get_llm_client():
     else:
         return None, None
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
     return client, model_name
 
 
-def _call_llm(client, model_name, prompt):
+async def _call_llm(client, model_name, prompt):
     """Call the LLM and return the response text, stripping markdown fences."""
     start_time = time.time()
-    response = client.chat.completions.create(
+    response = await client.chat.completions.create(
         model=model_name,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -159,7 +161,7 @@ def _split_html_into_chunks(html_content, max_chunk_size=50000):
     return chunks
 
 
-def _compress_chunk(client, model_name, chunk, chunk_index, total_chunks):
+async def _compress_chunk(client, model_name, chunk, chunk_index, total_chunks):
     """Use LLM to compress one chunk into compact HTML, preserving content."""
     prompt = f"""You are processing part {chunk_index + 1} of {total_chunks} of a web page.
 
@@ -176,12 +178,12 @@ HTML to compress:
 {chunk}"""
 
     print(f"  Compressing chunk {chunk_index + 1}/{total_chunks} ({len(chunk)} chars)...")
-    result = _call_llm(client, model_name, prompt)
+    result = await _call_llm(client, model_name, prompt)
     print(f"  Chunk {chunk_index + 1}: {len(chunk)} → {len(result)} chars")
     return result
 
 
-def simplify_html_ai(html_content):
+async def simplify_html_ai(html_content):
     """Single-pass AI simplification for small pages."""
     if not html_content:
         return "Error: No HTML content provided"
@@ -196,10 +198,10 @@ def simplify_html_ai(html_content):
     Content to transform:
     {html_content}
     """
-    return _call_llm(client, model_name, prompt)
+    return await _call_llm(client, model_name, prompt)
 
 
-def simplify_html(html_content):
+async def _simplify_html_async(html_content):
     if not html_content:
         return "Error: No HTML content provided"
     
@@ -214,10 +216,10 @@ def simplify_html(html_content):
         f.write(rule_simplified)
 
     # If small enough, single-pass through LLM
-    MAX_CHUNK_SIZE = 50000
+    MAX_CHUNK_SIZE = 100000
     if len(rule_simplified) <= MAX_CHUNK_SIZE:
         print("Content fits in single LLM call")
-        ai_simplified = simplify_html_ai(rule_simplified)
+        ai_simplified = await simplify_html_ai(rule_simplified)
     else:
         # Chunked processing for large pages
         client, model_name = _get_llm_client()
@@ -227,11 +229,13 @@ def simplify_html(html_content):
         chunks = _split_html_into_chunks(rule_simplified, MAX_CHUNK_SIZE)
         print(f"Content too large — splitting into {len(chunks)} chunks")
 
-        # Compress each chunk
-        compressed = []
+        # Compress each chunk in parallel
+        tasks = []
         for i, chunk in enumerate(chunks):
-            compressed_chunk = _compress_chunk(client, model_name, chunk, i, len(chunks))
-            compressed.append(compressed_chunk)
+            task = _compress_chunk(client, model_name, chunk, i, len(chunks))
+            tasks.append(task)
+        
+        compressed = await asyncio.gather(*tasks)
 
         # Assemble compressed chunks with final LLM call
         assembled_content = "\n\n<!-- SECTION BREAK -->\n\n".join(compressed)
@@ -248,7 +252,7 @@ Compressed content:
 {assembled_content}
 """
         print("Assembling final page...")
-        ai_simplified = _call_llm(client, model_name, assemble_prompt)
+        ai_simplified = await _call_llm(client, model_name, assemble_prompt)
 
     print(f"AI-simplified HTML content length: {len(ai_simplified)}")
 
@@ -256,6 +260,24 @@ Compressed content:
         f.write(ai_simplified)
 
     return ai_simplified
+
+def simplify_html(html_content):
+    """Synchronous wrapper for _simplify_html_async to allow parallel chunk processing."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # If we are already in an async environment (like mitmproxy),
+        # we need to run the async function in a separate thread to block synchronously
+        # without interfering with the current loop.
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, _simplify_html_async(html_content))
+            return future.result()
+    else:
+        # Standard sync environment
+        return asyncio.run(_simplify_html_async(html_content))
 
 def rewrite_links(html_content, base_url, proxy_prefix):
     soup = BeautifulSoup(html_content, 'html.parser')

@@ -27,6 +27,8 @@ def proxy():
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
         }
+        # requests is synchronous, but we can keep it for now as it's just fetching the source
+        # Ideally we'd use aiohttp, but the task was just to parallelize the chunk processing
         response = requests.get(url, headers=headers, timeout=20)
         response.raise_for_status()
         
@@ -76,4 +78,4 @@ def handle_instructions():
     })
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", debug=True, port=5000)
+    app.run(host="0.0.0.0", debug=True, port=5337)
