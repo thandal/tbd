@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, Response, jsonify
 import requests
-from darkly_addon import simplify_html, rewrite_links
+from darkly_addon import simplify_html_stream
 
 load_dotenv()
 
@@ -13,7 +13,7 @@ def index():
     return render_template('index.html')
 
 @app.route('/proxy')
-def proxy():
+async def proxy():
     url = request.args.get('url')
     
     if not url:
@@ -27,8 +27,7 @@ def proxy():
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
         }
-        # requests is synchronous, but we can keep it for now as it's just fetching the source
-        # Ideally we'd use aiohttp, but the task was just to parallelize the chunk processing
+        # requests is synchronous, but works fine for this test script
         response = requests.get(url, headers=headers, timeout=20)
         response.raise_for_status()
         
@@ -40,17 +39,22 @@ def proxy():
             
         html_content = response.text
 
-        # Use AI to simplify the HTML (uses AI_PROVIDER from .env)
-        simplified = simplify_html(html_content)
-        
-        if simplified.startswith("Error:"):
-            return simplified, 500
-            
-        # Rewrite links to stay in proxy
-        proxy_prefix = "/proxy?url="
-        rewritten = rewrite_links(simplified, url, proxy_prefix)
-        
-        return Response(rewritten, mimetype='text/html')
+        # Use AI to simplify the HTML and stream the response
+        def generate():
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            agen = simplify_html_stream(html_content, url, "/proxy?url=")
+            try:
+                while True:
+                    chunk = loop.run_until_complete(agen.__anext__())
+                    yield chunk
+            except StopAsyncIteration:
+                pass
+            finally:
+                loop.close()
+                
+        return Response(generate(), mimetype='text/html')
             
     except requests.RequestException as e:
         return f"Error fetching page: {str(e)}", 500

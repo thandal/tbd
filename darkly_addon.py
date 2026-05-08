@@ -1,26 +1,26 @@
 from mitmproxy import http
 import asyncio
-import concurrent.futures
 import os
 import time
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from bs4 import BeautifulSoup, Comment
 from urllib.parse import urljoin, quote
+import markdown
+import re
+import bs4
 
 load_dotenv()
 
 DEFAULT_INSTRUCTIONS = """
-Below is the HTML content of a webpage. Your task is to rewrite it into a streamlined version.
+Below is a text representation of a web page. Your task is to rewrite it into a streamlined Markdown version.
     
 Rules:
-* Keep all meaningful text and links (hrefs).
-* Remove all ads, tracking scripts, and other non-content elements.
-* Include a <style> block with a simple, modern design (vibrant colors, clean typography, responsive layout).
-* Add links to wikipedia pages where applicable.
-* Return ONLY the complete HTML code starting with <!DOCTYPE html>."""
+* Keep all meaningful text and main content.
+* Remove all ads, tracking scripts, navigation (nav), sidebars, footers, and other non-content elements. Use the hints in the text to identify bloat.
+* Do not invent new links. If a link or image was provided like [text](id:X) or ![alt](id:Y), preserve the (id:X) exactly.
+* Return ONLY pure Markdown (no markdown fences, no explanation)."""
 
-# GLOBAL STATE for instructions (can be overridden by http://dark.ly)
 INSTRUCTIONS_FILE = "ai_instructions.txt"
 
 def load_instructions():
@@ -35,60 +35,66 @@ def save_instructions(instructions):
 
 current_instructions = load_instructions()
 
-def simplify_html_rule_based(html_content):
-    """Strip known non-content tags and simplify HTML structure."""
+def clean_text(text):
+    return re.sub(r'\s+', ' ', text).strip()
+
+def dom_to_condensed(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
-
-    # Remove tags that never contain useful visible content
-    for tag in soup(['script', 'style', 'noscript', 'iframe', 'svg', 'canvas',
-                     'video', 'audio', 'picture', 'source', 'object', 'embed',
-                     'button', 'input', 'textarea', 'select', 'form']):
+    for tag in soup(['script', 'style', 'noscript', 'svg', 'canvas', 'video', 'audio', 'iframe', 'button', 'input', 'form', 'select', 'textarea']):
         tag.decompose()
-
-    # html.parser incorrectly treats <link>/<meta> as containers, swallowing
-    # sibling content. unwrap() removes the tag but keeps any swallowed children.
-    for tag in soup(['link', 'meta']):
-        tag.unwrap()
-
-    # Strip attributes (keep href on <a>, src/alt on <img>)
-    for tag in soup.find_all(True):
-        if tag.name == 'a':
-            href = tag.get('href')
-            tag.attrs = {'href': href} if href else {}
-        elif tag.name == 'img':
-            src = tag.get('src')
-            alt = tag.get('alt', '')
-            tag.attrs = {'src': src, 'alt': alt} if src else {}
-        else:
-            tag.attrs = {}
-
-    # Remove comments
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
 
-    # Remove only true leaf-level empty tags (no children, no text)
-    keep_tags = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th',
-                 'tr', 'table', 'thead', 'tbody', 'ul', 'ol', 'dl', 'dt', 'dd',
-                 'blockquote', 'pre', 'article', 'section', 'main', 'figure',
-                 'body', 'html', 'head', 'title', 'nav', 'header', 'footer'}
-    for _ in range(3):
-        empty = [t for t in soup.find_all(True)
-                 if t.name not in keep_tags
-                 and not t.get_text(strip=True)
-                 and not t.find_all('img')
-                 and t.name != 'img'
-                 and not (t.name == 'a' and t.get('href'))
-                 and not list(t.children)]
-        if not empty:
-            break
-        for t in empty:
-            t.decompose()
+    mapping = {}
+    next_id = 1
+    block_tags = {'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'article', 'section', 'header', 'footer', 'nav', 'main', 'aside', 'figure', 'ul', 'ol', 'table', 'tr', 'td', 'th'}
 
-    return soup.prettify()
+    def process_node(node):
+        nonlocal next_id
+        if node.name == 'a':
+            href = node.get('href')
+            if href:
+                id_val = next_id; next_id += 1
+                mapping[id_val] = {'type': 'a', 'href': href}
+                text = "".join(process_node(c) for c in node.children)
+                text = clean_text(text)
+                if text: return f"[{text}][{id_val}]"
+            return ""
+        elif node.name == 'img':
+            src = node.get('src')
+            if src:
+                id_val = next_id; next_id += 1
+                mapping[id_val] = {'type': 'img', 'src': src, 'alt': node.get('alt', '')}
+                return f"![{node.get('alt', '').strip()}][{id_val}]"
+            return ""
+        elif type(node) == bs4.element.NavigableString:
+            return str(node)
+        elif node.name is not None:
+            is_block = node.name in block_tags
+            hint = ""
+            if node.name in ['nav', 'header', 'footer', 'aside']:
+                hint = f"({node.name.upper()}) "
+            classes = node.get('class', [])
+            if classes:
+                classes_str = " ".join(classes).lower()
+                if any(bad in classes_str for bad in ['ad', 'sponsor', 'nav', 'menu', 'sidebar', 'footer', 'header', 'promo']):
+                    hint = f"({node.name.upper()} hint:{' '.join(classes)}) "
+            children_text = "".join(process_node(c) for c in node.children)
+            if is_block:
+                clean_children = clean_text(children_text)
+                if clean_children:
+                    return f"\n{hint}{clean_children}\n"
+                return ""
+            else:
+                return children_text
+        return ""
 
+    body = soup.find('body') or soup
+    raw_condensed = process_node(body)
+    condensed = re.sub(r'\n+', '\n', raw_condensed).strip()
+    return condensed, mapping
 
 def _get_llm_client():
-    """Return (client, model_name) based on env config."""
     model_provider = os.getenv("AI_PROVIDER")
     if model_provider == "cerebras":
         api_key = os.getenv("CEREBRAS_API_KEY")
@@ -112,201 +118,187 @@ def _get_llm_client():
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
     return client, model_name
 
-
-async def _call_llm(client, model_name, prompt):
-    """Call the LLM and return the response text, stripping markdown fences."""
+async def _call_llm_stream(client, model_name, prompt):
     start_time = time.time()
     response = await client.chat.completions.create(
         model=model_name,
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
+        stream=True
     )
-    text = response.choices[0].message.content
+    async for chunk in response:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
     duration = time.time() - start_time
     print(f"--- AI Generation ({model_name}) took {duration:.2f}s ---")
 
-    if "```html" in text:
-        text = text.split("```html")[1].split("```")[0]
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0]
+class MarkdownStreamParser:
+    def __init__(self, mapping, base_url="", proxy_prefix=""):
+        self.mapping = mapping
+        self.base_url = base_url
+        self.proxy_prefix = proxy_prefix
+        self.buffer = ""
+        self.md = markdown.Markdown()
 
-    return text.strip()
-
-
-import re
-
-def _split_html_into_chunks(html_content, max_chunk_size=50000):
-    """Split HTML at heading boundaries into chunks of roughly max_chunk_size."""
-    if len(html_content) <= max_chunk_size:
-        return [html_content]
-
-    # Split at major heading tags (<h1>, <h2>, <h3>) to keep sections intact
-    # Use lookahead so the heading stays with the chunk that follows it
-    parts = re.split(r'(?=<(?:h[1-3])[\s>])', html_content, flags=re.IGNORECASE)
-
-    chunks = []
-    current_chunk = ""
-
-    for part in parts:
-        # If adding this part would exceed the limit and we already have content,
-        # save the current chunk and start a new one
-        if current_chunk and len(current_chunk) + len(part) > max_chunk_size:
-            chunks.append(current_chunk)
-            current_chunk = part
+    def process_chunk(self, chunk_text):
+        self.buffer += chunk_text
+        
+        # Strip leading markdown fences if they arrive in the first few chunks
+        if self.buffer.startswith("```"):
+            self.buffer = re.sub(r'^```[a-zA-Z]*\s*\n?', '', self.buffer)
+            
+        blocks = self.buffer.split("\n\n")
+        
+        if not self.buffer.endswith("\n\n"):
+            self.buffer = blocks.pop()
         else:
-            current_chunk += part
+            self.buffer = ""
+            
+        html_chunks = []
+        for block in blocks:
+            # Strip trailing fences if they appear
+            block = re.sub(r'\n?```\s*$', '', block)
+            if not block.strip():
+                continue
+            html = self.md.convert(block.strip())
+            html = self.restore_ids(html)
+            html_chunks.append(html + "\n")
+        
+        return "".join(html_chunks)
 
-    if current_chunk:
-        chunks.append(current_chunk)
+    def finish(self):
+        # Strip trailing fences
+        self.buffer = re.sub(r'\n?```\s*$', '', self.buffer)
+        if self.buffer.strip():
+            html = self.md.convert(self.buffer.strip())
+            html = self.restore_ids(html)
+            return html + "\n"
+        return ""
 
-    return chunks
+    def restore_ids(self, html):
+        def replace_a(match):
+            text = match.group(1)
+            id_val = int(match.group(2))
+            if id_val in self.mapping:
+                map_data = self.mapping[id_val]
+                original_href = map_data["href"]
+                if self.base_url:
+                    absolute_href = urljoin(self.base_url, original_href)
+                    final_href = f"{self.proxy_prefix}{quote(absolute_href)}" if self.proxy_prefix else absolute_href
+                else:
+                    final_href = original_href
+                return f'<a href="{final_href}">{text}</a>'
+            return match.group(0)
 
+        def replace_img(match):
+            alt = match.group(1)
+            id_val = int(match.group(2))
+            if id_val in self.mapping:
+                map_data = self.mapping[id_val]
+                original_src = map_data["src"]
+                if self.base_url:
+                    absolute_src = urljoin(self.base_url, original_src)
+                    final_src = f"{self.proxy_prefix}{quote(absolute_src)}" if self.proxy_prefix else absolute_src
+                else:
+                    final_src = original_src
+                return f'<img src="{final_src}" alt="{alt}" />'
+            return match.group(0)
 
-async def _compress_chunk(client, model_name, chunk, chunk_index, total_chunks):
-    """Use LLM to compress one chunk into compact HTML, preserving content."""
-    prompt = f"""You are processing part {chunk_index + 1} of {total_chunks} of a web page.
+        html = re.sub(r'!\[([^\]]*)\]\[(\d+)\]', replace_img, html)
+        html = re.sub(r'\[([^\]]+)\]\[(\d+)\]', replace_a, html)
+        return html
 
-Rewrite this HTML fragment into MUCH more compact HTML. Rules:
-* Keep ALL meaningful text content — do not omit or summarize.
-* Keep all links (a href) and images (img src).
-* Remove all redundant wrapper divs, spans, and empty tags.
-* Remove navigation, sidebars, footers, and non-content elements.
-* Use simple semantic HTML (p, h1-h6, ul, li, table, a, img).  
-* Do NOT add any styling, <head>, or <body> tags — just the content fragment.
-* Return ONLY the HTML fragment, no explanation.
-
-HTML to compress:
-{chunk}"""
-
-    print(f"  Compressing chunk {chunk_index + 1}/{total_chunks} ({len(chunk)} chars)...")
-    result = await _call_llm(client, model_name, prompt)
-    print(f"  Chunk {chunk_index + 1}: {len(chunk)} → {len(result)} chars")
-    return result
-
-
-async def simplify_html_ai(html_content):
-    """Single-pass AI simplification for small pages."""
+async def simplify_html_stream(html_content, base_url="", proxy_prefix=""):
     if not html_content:
-        return "Error: No HTML content provided"
-
+        yield "Error: No HTML content provided"
+        return
+        
     client, model_name = _get_llm_client()
     if not client:
-        return "Error: Unsupported model type"
+        yield "Error: Unsupported model type"
+        return
 
-    prompt = f"""\
-    {current_instructions}
+    print(f"Original HTML length: {len(html_content)}")
+    condensed, mapping = dom_to_condensed(html_content)
+    print(f"Condensed markdown length: {len(condensed)}, IDs mapped: {len(mapping)}")
+
+    prompt = f"{current_instructions}\n\nContent to transform:\n{condensed}"
+    parser = MarkdownStreamParser(mapping, base_url, proxy_prefix)
     
-    Content to transform:
-    {html_content}
-    """
-    return await _call_llm(client, model_name, prompt)
-
-
-async def _simplify_html_async(html_content):
-    if not html_content:
-        return "Error: No HTML content provided"
-    
-    print(f"Original HTML content length: {len(html_content)}")
-    with open("debug_original.html", "w") as f:
-        f.write(html_content)
-
-    rule_simplified = simplify_html_rule_based(html_content)
-    print(f"Rule-simplified HTML content length: {len(rule_simplified)}")
-
-    with open("debug_rule_simplified.html", "w") as f:
-        f.write(rule_simplified)
-
-    # If small enough, single-pass through LLM
-    MAX_CHUNK_SIZE = 100000
-    if len(rule_simplified) <= MAX_CHUNK_SIZE:
-        print("Content fits in single LLM call")
-        ai_simplified = await simplify_html_ai(rule_simplified)
-    else:
-        # Chunked processing for large pages
-        client, model_name = _get_llm_client()
-        if not client:
-            return "Error: Unsupported model type"
-
-        chunks = _split_html_into_chunks(rule_simplified, MAX_CHUNK_SIZE)
-        print(f"Content too large — splitting into {len(chunks)} chunks")
-
-        # Compress each chunk in parallel
-        tasks = []
-        for i, chunk in enumerate(chunks):
-            task = _compress_chunk(client, model_name, chunk, i, len(chunks))
-            tasks.append(task)
-        
-        compressed = await asyncio.gather(*tasks)
-
-        # Assemble compressed chunks with final LLM call
-        assembled_content = "\n\n<!-- SECTION BREAK -->\n\n".join(compressed)
-        print(f"Assembled compressed content: {len(assembled_content)} chars")
-
-        assemble_prompt = f"""\
-{current_instructions}
-
-The content below was split into {len(chunks)} separate chunks.
-Assemble them into a single, unified HTML page.
-Make sure the content flows naturally and there are no duplicated sections.
-
-Compressed content:
-{assembled_content}
+    yield f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Through a Browser, Darkly</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg: #fafafa;
+            --text: #171717;
+            --link: #2563eb;
+            --card: #ffffff;
+            --accent: #3b82f6;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            :root {{
+                --bg: #171717;
+                --text: #f5f5f5;
+                --link: #60a5fa;
+                --card: #262626;
+                --accent: #3b82f6;
+            }}
+        }}
+        body {{
+            font-family: 'Lora', serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+            font-size: 1.1rem;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            font-family: 'Outfit', sans-serif;
+            color: var(--text);
+            margin-top: 2rem;
+            font-weight: 600;
+        }}
+        a {{
+            color: var(--link);
+            text-decoration: none;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.2s;
+        }}
+        a:hover {{ border-color: var(--link); }}
+        img {{ max-width: 100%; height: auto; border-radius: 0.5rem; margin: 1rem 0; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }}
+        p {{ margin-bottom: 1.5rem; }}
+        blockquote {{ border-left: 4px solid var(--accent); margin: 0; padding-left: 1rem; color: #737373; font-style: italic; }}
+    </style>
+</head>
+<body>
+<div class="darkly-content">
 """
-        print("Assembling final page...")
-        ai_simplified = await _call_llm(client, model_name, assemble_prompt)
 
-    print(f"AI-simplified HTML content length: {len(ai_simplified)}")
-
-    with open("debug_ai_simplified.html", "w") as f:
-        f.write(ai_simplified)
-
-    return ai_simplified
-
-def simplify_html(html_content):
-    """Synchronous wrapper for _simplify_html_async to allow parallel chunk processing."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        # If we are already in an async environment (like mitmproxy),
-        # we need to run the async function in a separate thread to block synchronously
-        # without interfering with the current loop.
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, _simplify_html_async(html_content))
-            return future.result()
-    else:
-        # Standard sync environment
-        return asyncio.run(_simplify_html_async(html_content))
-
-def rewrite_links(html_content, base_url, proxy_prefix):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Rewrite <a> tags
-    for a in soup.find_all('a', href=True):
-        original_href = a['href']
-        # Resolve relative links
-        absolute_href = urljoin(base_url, original_href)
-        # Wrap in proxy prefix
-        a['href'] = f"{proxy_prefix}{quote(absolute_href)}"
+    async for md_chunk in _call_llm_stream(client, model_name, prompt):
+        html_chunk = parser.process_chunk(md_chunk)
+        if html_chunk:
+            yield html_chunk
+            
+    final_chunk = parser.finish()
+    if final_chunk:
+        yield final_chunk
         
-    # Rewrite <img> tags
-    for img in soup.find_all('img', src=True):
-        original_src = img['src']
-        absolute_src = urljoin(base_url, original_src)
-        img['src'] = f"{proxy_prefix}{quote(absolute_src)}"
-        
-    return str(soup)
+    yield "\n</div></body></html>"
 
 class DarklyAddon:
     def __init__(self):
         print("Darkly Proxy Addon Loaded")
         print("Control Panel available at http://dark.ly")
 
-    def request(self, flow: http.HTTPFlow):
+    async def request(self, flow: http.HTTPFlow):
         if flow.request.pretty_host == "dark.ly":
             if flow.request.method == "POST":
-                # Save instructions
                 try:
                     form_data = flow.request.multipart_form or flow.request.urlencoded_form
                     new_instructions = form_data.get("instructions")
@@ -319,15 +311,11 @@ class DarklyAddon:
                         current_instructions = new_instructions
                     
                     save_instructions(current_instructions)
-                    print(f"Instructions updated/reset.")
-                    
-                    # Redirect back to home after saving
                     flow.response = http.Response.make(302, b"", {"Location": "/"})
                 except Exception as e:
                     flow.response = http.Response.make(500, f"Error saving: {str(e)}".encode(), {"Content-Type": "text/plain"})
                 return
 
-            # GET / - Show editor
             html_page = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -335,98 +323,16 @@ class DarklyAddon:
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Through a Browser, Darkly - Config</title>
-                <link rel="preconnect" href="https://fonts.googleapis.com">
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
                 <style>
-                    :root {{
-                        --primary: #737373;
-                        --bg: #171717;
-                        --card: #262626;
-                        --text: #f5f5f5;
-                        --text-dim: #a3a3a3;
-                    }}
-                    body {{
-                        font-family: 'Outfit', sans-serif;
-                        background-color: var(--bg);
-                        color: var(--text);
-                        margin: 0;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        min-height: 100vh;
-                        overflow: hidden;
-                    }}
-                    .container {{
-                        background: var(--card);
-                        padding: 2.5rem;
-                        border-radius: 1.5rem;
-                        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-                        width: 100%;
-                        max-width: 700px;
-                        border: 1px solid rgba(255, 255, 255, 0.05);
-                        backdrop-filter: blur(10px);
-                        animation: slideIn 0.6s ease-out;
-                    }}
-                    @keyframes slideIn {{
-                        from {{ opacity: 0; transform: translateY(20px); }}
-                        to {{ opacity: 1; transform: translateY(0); }}
-                    }}
-                    h1 {{
-                        font-weight: 600;
-                        margin-top: 0;
-                        font-size: 1.875rem;
-                        color: var(--text);
-                        margin-bottom: 0.5rem;
-                    }}
+                    :root {{ --primary: #737373; --bg: #171717; --card: #262626; --text: #f5f5f5; --text-dim: #a3a3a3; }}
+                    body {{ font-family: 'Outfit', sans-serif; background-color: var(--bg); color: var(--text); margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }}
+                    .container {{ background: var(--card); padding: 2.5rem; border-radius: 1.5rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); width: 100%; max-width: 700px; border: 1px solid rgba(255, 255, 255, 0.05); }}
+                    h1 {{ font-weight: 600; margin-top: 0; font-size: 1.875rem; color: var(--text); margin-bottom: 0.5rem; }}
                     p {{ color: var(--text-dim); margin-bottom: 2rem; }}
-                    textarea {{
-                        width: 100%;
-                        height: 300px;
-                        background: #171717;
-                        border: 2px solid #404040;
-                        border-radius: 0.75rem;
-                        color: #e5e5e5;
-                        font-family: 'JetBrains Mono', monospace;
-                        padding: 1rem;
-                        font-size: 0.9rem;
-                        resize: none;
-                        box-sizing: border-box;
-                        transition: border-color 0.2s;
-                        margin-bottom: 1.5rem;
-                    }}
-                    textarea:focus {{
-                        outline: none;
-                        border-color: var(--primary);
-                        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.05);
-                    }}
-                    .btn {{
-                        background: #404040;
-                        color: white;
-                        border: none;
-                        padding: 0.75rem 2rem;
-                        border-radius: 0.75rem;
-                        font-weight: 600;
-                        cursor: pointer;
-                        font-family: inherit;
-                        transition: all 0.2s;
-                        width: 100%;
-                        font-size: 1rem;
-                    }}
-                    .btn:hover {{
-                        transform: translateY(-2px);
-                        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-                        background: #525252;
-                    }}
-                    .btn:active {{ transform: translateY(0); }}
-                    .btn-secondary {{
-                        background: #262626;
-                        border: 1px solid #404040;
-                    }}
-                    .btn-secondary:hover {{
-                        background: #333333;
-                        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-                    }}
+                    textarea {{ width: 100%; height: 300px; background: #171717; border: 2px solid #404040; border-radius: 0.75rem; color: #e5e5e5; font-family: 'JetBrains Mono', monospace; padding: 1rem; font-size: 0.9rem; resize: none; box-sizing: border-box; margin-bottom: 1.5rem; }}
+                    .btn {{ background: #404040; color: white; border: none; padding: 0.75rem 2rem; border-radius: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 1rem; }}
+                    .btn-secondary {{ background: #262626; border: 1px solid #404040; }}
                 </style>
             </head>
             <body>
@@ -437,7 +343,7 @@ class DarklyAddon:
                         <textarea name="instructions">{current_instructions}</textarea>
                         <div style="display: flex; gap: 1rem;">
                             <button type="submit" name="action" value="save" class="btn">Save Instructions</button>
-                            <button type="submit" name="action" value="reset" class="btn btn-secondary">Reset to Defaults</button>
+                            <button type="submit" name="action" value="reset" class="btn btn-secondary">Reset</button>
                         </div>
                     </form>
                 </div>
@@ -447,30 +353,23 @@ class DarklyAddon:
             flow.response = http.Response.make(200, html_page.encode(), {"Content-Type": "text/html"})
             return
 
-    def response(self, flow: http.HTTPFlow):
-        # We only want to simplify HTML responses
+    async def response(self, flow: http.HTTPFlow):
         content_type = flow.response.headers.get("Content-Type", "")
-        
-        # Check if this is a request we should simplify 
-        # (e.g., avoid modifying mitmproxy's own internal pages)
         if "text/html" in content_type and flow.request.pretty_host != "dark.ly" and flow.request.pretty_host != "mitm.it":
             print(f"Simplifying: {flow.request.pretty_url}")
             try:
-                # Decompress the response if needed
                 flow.response.decode()
-                
                 html_content = flow.response.get_text()
                 
-                # Apply AI simplification
-                simplified_html = simplify_html(html_content)
+                chunks = []
+                # Buffer the stream. Mitmproxy requires the full string assigned to response.set_text()
+                async for chunk in simplify_html_stream(html_content, flow.request.scheme + "://" + flow.request.pretty_host, ""):
+                    chunks.append(chunk)
                 
-                if simplified_html and not simplified_html.startswith("Error"):
-                    flow.response.set_text(simplified_html)
-                    # Update headers to reflect modification
-                    flow.response.headers["Content-Length"] = str(len(flow.response.raw_content))
-                    flow.response.headers["x-darkly"] = "true"
-                else:
-                    flow.response.set_text(f"Skipping simplification for {flow.request.pretty_url}: {simplified_html}...")
+                full_html = "".join(chunks)
+                flow.response.set_text(full_html)
+                flow.response.headers["Content-Length"] = str(len(flow.response.raw_content))
+                flow.response.headers["x-darkly"] = "true"
             except Exception as e:
                 flow.response.set_text(f"Failed to simplify {flow.request.pretty_url}: {str(e)}")
 
