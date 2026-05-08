@@ -42,17 +42,33 @@ async def proxy():
         # Use AI to simplify the HTML and stream the response
         def generate():
             import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            agen = simplify_html_stream(html_content, url, "/proxy?url=")
-            try:
-                while True:
-                    chunk = loop.run_until_complete(agen.__anext__())
-                    yield chunk
-            except StopAsyncIteration:
-                pass
-            finally:
+            import queue
+            import threading
+            
+            q = queue.Queue()
+            
+            def run_loop():
+                async def fetch():
+                    try:
+                        async for chunk in simplify_html_stream(html_content, url, "/proxy?url="):
+                            q.put(chunk)
+                    except Exception as e:
+                        q.put(f"Error streaming: {str(e)}")
+                    finally:
+                        q.put(None)
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(fetch())
                 loop.close()
+                
+            threading.Thread(target=run_loop, daemon=True).start()
+            
+            while True:
+                chunk = q.get()
+                if chunk is None:
+                    break
+                yield chunk
                 
         return Response(generate(), mimetype='text/html')
             

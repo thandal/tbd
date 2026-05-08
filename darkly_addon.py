@@ -18,7 +18,7 @@ Below is a text representation of a web page. Your task is to rewrite it into a 
 Rules:
 * Keep all meaningful text and main content.
 * Remove all ads, tracking scripts, navigation (nav), sidebars, footers, and other non-content elements. Use the hints in the text to identify bloat.
-* Do not invent new links. If a link or image was provided like [text](id:X) or ![alt](id:Y), preserve the (id:X) exactly.
+* Do not invent new links. If a link or image was provided like [text][X] or ![alt][Y], preserve the [X] exactly.
 * Return ONLY pure Markdown (no markdown fences, no explanation)."""
 
 INSTRUCTIONS_FILE = "ai_instructions.txt"
@@ -180,7 +180,7 @@ class MarkdownStreamParser:
             id_val = int(match.group(2))
             if id_val in self.mapping:
                 map_data = self.mapping[id_val]
-                original_href = map_data["href"]
+                original_href = map_data.get("href") or map_data.get("src", "#")
                 if self.base_url:
                     absolute_href = urljoin(self.base_url, original_href)
                     final_href = f"{self.proxy_prefix}{quote(absolute_href)}" if self.proxy_prefix else absolute_href
@@ -194,7 +194,7 @@ class MarkdownStreamParser:
             id_val = int(match.group(2))
             if id_val in self.mapping:
                 map_data = self.mapping[id_val]
-                original_src = map_data["src"]
+                original_src = map_data.get("src") or map_data.get("href", "#")
                 if self.base_url:
                     absolute_src = urljoin(self.base_url, original_src)
                     final_src = f"{self.proxy_prefix}{quote(absolute_src)}" if self.proxy_prefix else absolute_src
@@ -203,8 +203,52 @@ class MarkdownStreamParser:
                 return f'<img src="{final_src}" alt="{alt}" />'
             return match.group(0)
 
+        def replace_a_html(match):
+            href = match.group(1)
+            text = match.group(2)
+            if href.startswith('id:'):
+                try:
+                    id_val = int(href[3:])
+                    if id_val in self.mapping:
+                        map_data = self.mapping[id_val]
+                        original_href = map_data.get("href") or map_data.get("src", "#")
+                        if self.base_url:
+                            absolute_href = urljoin(self.base_url, original_href)
+                            final_href = f"{self.proxy_prefix}{quote(absolute_href)}" if self.proxy_prefix else absolute_href
+                        else:
+                            final_href = original_href
+                        return f'<a href="{final_href}">{text}</a>'
+                except ValueError:
+                    pass
+            return match.group(0)
+
+        def replace_img_html(match):
+            alt = match.group(1)
+            src = match.group(2)
+            if src.startswith('id:'):
+                try:
+                    id_val = int(src[3:])
+                    if id_val in self.mapping:
+                        map_data = self.mapping[id_val]
+                        original_src = map_data.get("src") or map_data.get("href", "#")
+                        if self.base_url:
+                            absolute_src = urljoin(self.base_url, original_src)
+                            final_src = f"{self.proxy_prefix}{quote(absolute_src)}" if self.proxy_prefix else absolute_src
+                        else:
+                            final_src = original_src
+                        return f'<img src="{final_src}" alt="{alt}" />'
+                except ValueError:
+                    pass
+            return match.group(0)
+
+        # Handle [text][X] and ![alt][X] mapping (Markdown References)
         html = re.sub(r'!\[([^\]]*)\]\[(\d+)\]', replace_img, html)
         html = re.sub(r'\[([^\]]+)\]\[(\d+)\]', replace_a, html)
+        
+        # Handle <a href="id:X"> mapping (Fallbacks for when LLM outputs [text](id:X))
+        html = re.sub(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', replace_a_html, html)
+        html = re.sub(r'<img[^>]*alt="([^"]*)"[^>]*src="([^"]+)"[^>]*>', replace_img_html, html)
+        
         return html
 
 async def simplify_html_stream(html_content, base_url="", proxy_prefix=""):
